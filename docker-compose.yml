@@ -1,6 +1,6 @@
 services:
   birthday-reminder:
-    build: .
+    image: ghcr.io/lela810/midata-birthdays:latest
     restart: unless-stopped
     dns:
       - 8.8.8.8

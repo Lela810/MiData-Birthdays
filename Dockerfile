@@ -14,9 +14,9 @@ COPY birthday_reminder.py .
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
-# Cron installieren
+# Cron + procps (fuer pgrep im Healthcheck) installieren
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends cron \
+    && apt-get install -y --no-install-recommends cron procps \
     && rm -rf /var/lib/apt/lists/*
 
 # Healthcheck script

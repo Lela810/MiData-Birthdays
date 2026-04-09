@@ -130,6 +130,11 @@ def enrich_person(person):
             if extras and extras[0].get("email"):
                 person["email"] = extras[0]["email"]
 
+        # Adresse extrahieren
+        person["address_street"] = dp.get("address", "")
+        person["address_zip"] = dp.get("zip_code", "")
+        person["address_town"] = dp.get("town", "")
+
         # Mobilnummer extrahieren (nur Schweizer Mobilnummern 076-079)
         phone_numbers = details.get("linked", {}).get("phone_numbers", [])
         for pn in phone_numbers:
@@ -216,7 +221,7 @@ def birthdays_in_window(people, days_ahead):
                 this_year = bday.replace(year=today.year + 1, day=28)
 
         diff = (this_year - today).days
-        if diff in REMINDER_DAYS:
+        if 0 <= diff <= days_ahead:
             upcoming.append({
                 "id":         person.get("id"),
                 "first_name": person.get("first_name", ""),
@@ -228,6 +233,9 @@ def birthdays_in_window(people, days_ahead):
                 "age":        this_year.year - bday.year,
                 "email":      person.get("email", ""),
                 "mobile":     person.get("mobile", ""),
+                "address_street": person.get("address_street", ""),
+                "address_zip":    person.get("address_zip", ""),
+                "address_town":   person.get("address_town", ""),
             })
 
     if no_bday:
@@ -287,15 +295,28 @@ def build_mail(birthdays):
         else:
             wann = f"in {p['days_until']} Tag(en)"
 
+        show_whatsapp = p["days_until"] <= 1
+        has_address = p["address_street"] or p["address_zip"] or p["address_town"]
+
         # HTML
         entries_html += (
             f"<div style='margin-bottom:18px;padding:12px 16px;border-left:4px solid #2e7d32;background:#f9f9f9'>\n"
             f"<p style='margin:0 0 4px 0;font-size:16px'><strong>{full}</strong> wird am {d} <strong>{p['age']} Jahre</strong> alt ({wann})</p>\n"
         )
-        if p["mobile"]:
+        if has_address:
+            addr_html = f"<div style='margin:8px 0 0 0;padding:8px 12px;background:#f0f0f0;border-radius:4px;font-size:14px;line-height:1.6'>"
+            addr_html += f"{p['first_name']} {p['last_name']}<br>"
+            if p["address_street"]:
+                addr_html += f"{p['address_street']}<br>"
+            zip_town = f"{p['address_zip']} {p['address_town']}".strip()
+            if zip_town:
+                addr_html += f"{zip_town}"
+            addr_html += "</div>\n"
+            entries_html += addr_html
+        if show_whatsapp and p["mobile"]:
             wa_link = format_whatsapp_link(p["mobile"])
             entries_html += (
-                f"<p style='margin:4px 0 0 0'>"
+                f"<p style='margin:8px 0 0 0'>"
                 f"<a href='{wa_link}' style='color:#25D366;text-decoration:none;font-weight:bold'>"
                 f"WhatsApp ({p['mobile']})</a></p>\n"
             )
@@ -303,7 +324,14 @@ def build_mail(birthdays):
 
         # Plain text
         entries_text += f"{full} wird am {d} {p['age']} Jahre alt ({wann})\n"
-        if p["mobile"]:
+        if has_address:
+            entries_text += f"  {p['first_name']} {p['last_name']}\n"
+            if p["address_street"]:
+                entries_text += f"  {p['address_street']}\n"
+            zip_town = f"{p['address_zip']} {p['address_town']}".strip()
+            if zip_town:
+                entries_text += f"  {zip_town}\n"
+        if show_whatsapp and p["mobile"]:
             wa_link = format_whatsapp_link(p["mobile"])
             entries_text += f"  WhatsApp: {wa_link}\n"
         entries_text += "\n"
@@ -357,22 +385,25 @@ def main():
     log.info("=== Pfadi Birthday Reminder gestartet ===")
     state = load_state()
     people    = fetch_people_via_filter(GROUP_ID, FILTER_ID)
-    birthdays = birthdays_in_window(people, DAYS_AHEAD)
-    log.info("%d Geburtstag(e) in den naechsten %d Tagen.", len(birthdays), DAYS_AHEAD)
+    all_upcoming = birthdays_in_window(people, DAYS_AHEAD)
+    log.info("%d Geburtstag(e) in den naechsten %d Tagen:", len(all_upcoming), DAYS_AHEAD)
+    for b in all_upcoming:
+        log.info("  %s %s (%s): %s - in %d Tag(en), wird %d%s",
+                 b["first_name"], b["last_name"], b["pfadiname"] or "-",
+                 b["bday_date"], b["days_until"], b["age"],
+                 " -> REMINDER" if b["days_until"] in REMINDER_DAYS else "")
+
+    birthdays = [b for b in all_upcoming if b["days_until"] in REMINDER_DAYS]
+    log.info("%d davon an Reminder-Tagen (%s).", len(birthdays), ",".join(str(d) for d in sorted(REMINDER_DAYS)))
 
     if not birthdays:
-        log.info("Kein Geburtstag im Zeitfenster - kein Mail.")
+        log.info("Kein Geburtstag an Reminder-Tagen - kein Mail.")
         return
 
     birthdays = filter_already_sent(birthdays, state)
     if not birthdays:
         log.info("Alle Reminder bereits gesendet - kein Mail.")
         return
-
-    for b in birthdays:
-        log.info("  -> %s %s (%s): %s - in %d Tag(en), wird %d",
-                 b["first_name"], b["last_name"], b["pfadiname"] or "-",
-                 b["bday_date"], b["days_until"], b["age"])
 
     send_mail_smtp(birthdays)
     state = mark_as_sent(birthdays, state)
